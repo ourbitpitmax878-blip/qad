@@ -132,15 +132,30 @@ async def get_user_async(user_id):
     GLOBAL_USERS[user_id] = new_user_doc
     return new_user_doc
 
+def get_user_display_name(user):
+    """Gets a safe display name for a user (username or first/last name)."""
+    if user.username:
+        return f"@{user.username}"
+    
+    name = user.first_name
+    if user.last_name:
+        name += f" {user.last_name}"
+    # (از نام HTML-safe برای جلوگیری از خطاهای قالب‌بندی استفاده می‌کنیم)
+    return html.escape(name)
 
 # --- Keyboards ---
 def get_main_keyboard(user_doc):
-    keyboard = [
-        [KeyboardButton("💰 موجودی"), KeyboardButton("💳 افزایش اعتبار")],
-        [KeyboardButton("🎁 کسب اعتبار رایگان"), KeyboardButton("💬 پشتیبانی")],
-    ]
     if user_doc.get('is_admin'):
-        keyboard.append([KeyboardButton("👑 پنل ادمین")])
+        # (منوی ساده برای ادمین)
+        keyboard = [
+            [KeyboardButton("💰 موجودی"), KeyboardButton("👑 پنل ادمین")],
+        ]
+    else:
+        # (منوی عادی برای کاربران)
+        keyboard = [
+            [KeyboardButton("💰 موجودی"), KeyboardButton("💳 افزایش اعتبار")],
+            [KeyboardButton("🎁 کسب اعتبار رایگان"), KeyboardButton("💬 پشتیبانی")],
+        ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 admin_keyboard = ReplyKeyboardMarkup([
@@ -292,9 +307,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     referrer_doc = await get_user_async(referrer_id)
                     referrer_doc['balance'] += reward
                     
+                    # (تغییر: اضافه کردن نام کاربر جدید به پیام)
+                    new_user_display_name = get_user_display_name(user)
                     await context.bot.send_message(
                         chat_id=referrer_id,
-                        text=f"🎁 تبریک! یک کاربر جدید از طریق لینک شما وارد ربات شد و شما {reward} اعتبار پاداش گرفتید."
+                        text=f"🎁 تبریک! کاربر {new_user_display_name} از طریق لینک شما وارد ربات شد و شما {reward} اعتبار پاداش گرفتید."
                     )
             except (ValueError, TypeError):
                 pass
@@ -930,10 +947,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             
             await query.answer("✅ شرط با موفقیت لغو شد.", show_alert=False)
             try:
-                await query.edit_message_caption(caption=f"❌ شرط توسط @{bet['proposer_username']} لغو شد.", reply_markup=None)
+                await query.edit_message_caption(caption=f"❌ شرط توسط {bet['proposer_username']} لغو شد.", reply_markup=None)
             except Exception:
                 try:
-                    await query.edit_message_text(f"❌ شرط توسط @{bet['proposer_username']} لغو شد.", reply_markup=None)
+                    await query.edit_message_text(f"❌ شرط توسط {bet['proposer_username']} لغو شد.", reply_markup=None)
                 except: pass
             return
 
@@ -949,10 +966,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return
             
             # (آپدیت وضعیت شرط در حافظه)
-            opponent_username = user.username or user.first_name
+            # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+            opponent_display_name = get_user_display_name(user)
             bet['status'] = 'active'
             bet['opponent_id'] = user.id
-            bet['opponent_username'] = opponent_username
+            bet['opponent_username'] = opponent_display_name
             
             joiner_doc = await get_user_async(user.id)
             if joiner_doc['balance'] < bet['amount']:
@@ -1011,12 +1029,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 logging.info(f"Transferred {tax} credit tax from bet {bet_id} to owner {OWNER_ID}")
 
             # 5. Determine usernames
+            # (تغییر: استفاده از نام‌های نمایشی ذخیره شده)
             if winner_id == proposer_id:
-                winner_username = bet['proposer_username']
-                loser_username = opponent_username
+                winner_display_name = bet['proposer_username']
+                loser_display_name = opponent_display_name
             else:
-                winner_username = opponent_username
-                loser_username = bet['proposer_username']
+                winner_display_name = opponent_display_name
+                loser_display_name = bet['proposer_username']
 
             # 6. Delete the bet
             GLOBAL_BETS.pop(bet_id, None)
@@ -1024,8 +1043,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             # 7. Construct result message
             result_text = (
                 f"♦️ — نتیجه شرط — ♦️\n"
-                f"| 🏆 | : برنده : @{winner_username}\n"
-                f"| ❌ | : بازنده : @{loser_username}\n"
+                f"| 🏆 | : برنده : {winner_display_name}\n"
+                f"| ❌ | : بازنده : {loser_display_name}\n"
                 f"| 🎁 | جایزه: {prize:,} اعتبار\n"
                 f"| 📉 | مالیات: {tax:,} اعتبار (از کل مبلغ)\n"
                 f"♦️ — @{context.bot.username} — ♦️"
@@ -1058,15 +1077,17 @@ async def group_balance_handler(update: Update, context: ContextTypes.DEFAULT_TY
         price = 1000
     toman_value = target_user_doc['balance'] * price
 
+    # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+    target_display_name = get_user_display_name(target_user)
     text = (
-        f"👤 کاربر: @{target_user.username or target_user.first_name}\n"
+        f"👤 کاربر: {target_display_name}\n"
         f"💰 موجودی اعتبار: {target_user_doc['balance']:,}\n"
         f"💳 معادل تخمینی: {toman_value:,.0f} تومان"
     )
     await update.message.reply_text(text)
 
 async def transfer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles credit transfers in groups (reply with amount)."""
+    """Handles credit transfers in groups (reply with 'انتقال 100')."""
     if not update.message or not update.message.reply_to_message or not update.message.reply_to_message.from_user:
         return
 
@@ -1074,10 +1095,18 @@ async def transfer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     receiver = update.message.reply_to_message.from_user
 
     try:
-        amount = int(update.message.text.strip())
+        # (تغییر: استخراج مبلغ از متن پیام بر اساس رگکس جدید)
+        match = re.search(r'(\d+)', update.message.text)
+        if not match:
+            return  # (این نباید اتفاق بیفتد اگر رگکس درست باشد)
+        
+        amount = int(match.group(1))
+        
         if amount <= 0:
+            await update.message.reply_text("مبلغ انتقال باید مثبت باشد.")
             return
     except (ValueError, TypeError):
+        await update.message.reply_text("خطا در خواندن مبلغ.")
         return 
 
     try:
@@ -1096,10 +1125,14 @@ async def transfer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_doc['balance'] -= amount
         receiver_doc['balance'] += amount
 
+        # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+        sender_display_name = get_user_display_name(sender)
+        receiver_display_name = get_user_display_name(receiver)
+
         text = (
             f"✅ انتقال موفق ✅\n\n"
-            f"👤 از: @{sender.username or sender.first_name}\n"
-            f"👥 به: @{receiver.username or receiver.first_name}\n"
+            f"👤 از: {sender_display_name}\n"
+            f"👥 به: {receiver_display_name}\n"
             f"💰 مبلغ: {amount:,} اعتبار"
         )
         await update.message.reply_text(text)
@@ -1128,11 +1161,12 @@ async def start_bet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     bet_id = BET_ID_COUNTER
-    proposer_username = proposer.username or proposer.first_name
+    # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+    proposer_display_name = get_user_display_name(proposer)
     GLOBAL_BETS[bet_id] = {
         'bet_id': bet_id,
         'proposer_id': proposer.id,
-        'proposer_username': proposer_username,
+        'proposer_username': proposer_display_name, # (ذخیره نام نمایشی)
         'amount': amount,
         'chat_id': update.effective_chat.id,
         'status': 'pending',
@@ -1147,7 +1181,8 @@ async def start_bet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    proposer_mention = f"@{proposer_username}"
+    # (تغییر: استفاده از نام نمایشی بدون @ اضافه)
+    proposer_mention = proposer_display_name
     text = (
         f"♦️ — شرط جدید (ID: {bet_id}) — ♦️\n"
         f"| 💰 | مبلغ شرط : {amount:,} اعتبار\n"
@@ -1219,18 +1254,22 @@ async def deduct_balance_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     target_doc = await get_user_async(target_user.id)
+    # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+    target_display_name = get_user_display_name(target_user)
     if target_doc.get('balance', 0) < amount_to_deduct:
-        await update.message.reply_text(f"کاربر @{target_user.username or target_user.first_name} موجودی کافی برای کسر {amount_to_deduct:,} اعتبار را ندارد.")
+        await update.message.reply_text(f"کاربر {target_display_name} موجودی کافی برای کسر {amount_to_deduct:,} اعتبار را ندارد.")
         return
 
     target_doc['balance'] -= amount_to_deduct
     
+    # (تغییر: استفاده از تابع کمکی برای نام نمایشی)
+    admin_display_name = get_user_display_name(admin_user)
     tehran_time = datetime.now(TEHRAN_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
     receipt_text = (
-        f"❌ {amount_to_deduct:,} اعتبار از @{target_user.username or target_user.first_name} کسر شد.\n"
+        f"❌ {amount_to_deduct:,} اعتبار از {target_display_name} کسر شد.\n"
         f"🧾 رسید کسر:\n"
-        f"📤 ادمین/مادریتور: @{admin_user.username or admin_user.first_name}\n"
-        f"📥 کاربر: @{target_user.username or target_user.first_name}\n"
+        f"📤 ادمین/مادریتور: {admin_display_name}\n"
+        f"📥 کاربر: {target_display_name}\n"
         f"💰 مقدار: {amount_to_deduct:,}\n"
         f"⏰ {tehran_time}"
     )
@@ -1396,8 +1435,10 @@ if __name__ == "__main__":
     # Group Handlers
     application.add_handler(MessageHandler(filters.Regex(r'^(شرط|بت)$') & filters.ChatType.GROUPS, show_bet_keyboard_handler))
     application.add_handler(MessageHandler(filters.Regex(r'^(شرطبندی|شرط) \d+$') & filters.ChatType.GROUPS, start_bet_handler))
-    # handler for transfer: just reply with a number
-    application.add_handler(MessageHandler(filters.Regex(r'^\d+$') & filters.REPLY & filters.ChatType.GROUPS, transfer_handler))
+    
+    # (تغییر: رگکس برای انتقال وجه به صورت "انتقال 100" در ریپلای)
+    application.add_handler(MessageHandler(filters.Regex(r'^(انتقال|transfer)\s+(\d+)$') & filters.REPLY & filters.ChatType.GROUPS, transfer_handler))
+    
     application.add_handler(MessageHandler(filters.Regex(r'^موجودی$') & filters.ChatType.GROUPS, group_balance_handler))
     application.add_handler(MessageHandler(filters.Regex(r'^(کسر اعتبار|کسر) \d+$') & filters.REPLY & filters.ChatType.GROUPS, deduct_balance_handler))
     application.add_handler(MessageHandler(filters.Regex(r'^موجودی 💰$') & filters.ChatType.GROUPS, group_balance_handler))
