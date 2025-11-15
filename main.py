@@ -68,15 +68,15 @@ def init_memory_db():
 BOT_EVENT_LOOP = None
 
 # --- Conversation Handler States ---
+# (تغییر: حذف AWAIT_REMOVE_CHANNEL و مرتب‌سازی مجدد)
 (ADMIN_MENU, AWAIT_ADMIN_REPLY, AWAIT_DEPOSIT_AMOUNT, AWAIT_DEPOSIT_RECEIPT,
  AWAIT_SUPPORT_MESSAGE, AWAIT_ADMIN_SUPPORT_REPLY,
- AWAIT_NEW_CHANNEL, AWAIT_REMOVE_CHANNEL, AWAIT_BET_PHOTO,
+ AWAIT_NEW_CHANNEL, AWAIT_BET_PHOTO,
  AWAIT_ADMIN_SET_BALANCE, AWAIT_ADMIN_TAX, AWAIT_ADMIN_CREDIT_PRICE,
  AWAIT_ADMIN_REFERRAL_PRICE, AWAIT_ADMIN_SET_BALANCE_ID,
  AWAIT_MANAGE_USER_ID, AWAIT_MANAGE_USER_ROLE,
- # (تغییر: افزودن استیت‌های جدید برای تنظیم کارت)
  AWAIT_ADMIN_SET_CARD_NUMBER, AWAIT_ADMIN_SET_CARD_HOLDER
-) = range(18)
+) = range(17)
 
 
 # =======================================================
@@ -183,95 +183,129 @@ bet_group_keyboard = ReplyKeyboardMarkup([
 #  بخش ۴: سیستم عضویت اجباری (نسخه Async)
 # =======================================================
 
-async def get_join_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup | None:
-    """Creates the keyboard for the forced join message."""
-    # (خواندن از حافظه)
-    channels = list(GLOBAL_CHANNELS.values())
-    
+# (تغییر: این تابع بازطراحی شده تا فقط کانال‌های مورد نیاز را بسازد)
+async def get_specific_join_keyboard(channels: list) -> InlineKeyboardMarkup | None:
+    """Creates the keyboard for the forced join message for specific channels."""
     if not channels:
         return None
 
     keyboard_buttons = []
     for channel in channels:
+        # (اطمینان از داشتن 'channel_link' و 'channel_username')
+        link = channel.get('channel_link', 'https://telegram.org')
+        username = channel.get('channel_username', 'کانال')
         keyboard_buttons.append([
-            InlineKeyboardButton(f"عضویت در {channel.get('channel_username', 'کانال')}", url=channel['channel_link'])
+            InlineKeyboardButton(f"عضویت در {username}", url=link)
         ])
 
     keyboard_buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join_membership")])
     return InlineKeyboardMarkup(keyboard_buttons)
 
+# (تغییر: کل این تابع با منطق جدید و قوی‌تر جایگزین شده است)
 async def membership_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     A high-priority handler that checks channel membership before allowing any other handler to run.
     """
-    if not update.effective_user:
-        return
+    user = update.effective_user
+    query = update.callback_query
+    
+    if not user:
+        return  # (کاربری برای بررسی وجود ندارد)
 
-    user_id = update.effective_user.id
-
-    if user_id == OWNER_ID:
-        return
+    if user.id == OWNER_ID:
+        return  # (مالک معاف است)
 
     forced_lock_str = await get_setting_async("forced_channel_lock")
     forced_lock = forced_lock_str == 'true'
     
     if not forced_lock:
-        return
+        return  # (ویژگی غیرفعال است)
 
     channels = list(GLOBAL_CHANNELS.values())
     
     if not channels:
-        logging.warning("Forced channel lock is ON but no channels are set in memory.")
-        return
+        return  # (ویژگی فعال است، اما کانالی تنظیم نشده)
 
     not_joined_channels = []
 
     for channel in channels:
         channel_username = channel['channel_username']
         try:
-            member = await context.bot.get_chat_member(channel_username, user_id)
+            member = await context.bot.get_chat_member(channel_username, user.id)
             if member.status not in ['member', 'administrator', 'creator']:
                 not_joined_channels.append(channel)
         except Exception as e:
-            logging.error(f"Failed to check membership for user {user_id} in channel {channel_username}: {e}")
+            # (خطا را ثبت کن، اما فرض کن عضو نیست)
+            logging.error(f"Failed to check membership for user {user.id} in channel {channel_username}: {e}")
             not_joined_channels.append(channel)
-            try:
+            # (تلاش برای اطلاع‌رسانی به مالک، اما کاربر را به خاطر این خطا مسدود نکن)
+            with contextlib.suppress(Exception):
                 await context.bot.send_message(
                     chat_id=OWNER_ID,
-                    text=f"⚠️ **خطا در بررسی عضویت اجbاری** ⚠️\n\n"
-                         f"ربات نتوانست عضویت کاربر `{user_id}` را در کانال `{channel_username}` بررسی کند.\n\n"
+                    text=f"⚠️ **خطا در بررسی عضویت اجbاری** ⚠️\n"
+                         f"ربات نتوانست عضویت کاربر `{user.id}` را در کانال `{channel_username}` بررسی کند.\n"
                          f"**دلیل احتمالی:** ربات در کانال ادمین نیست یا یوزرنیم اشتباه است.\n"
                          f"**خطای اصلی:** `{e}`",
                     parse_mode=ParseMode.MARKDOWN
                 )
-            except Exception:
-                pass
 
-    if update.callback_query and update.callback_query.data == "check_join_membership":
-        query = update.callback_query
+    # --- مدیریت دکمه "بررسی عضویت" ---
+    if query and query.data == "check_join_membership":
         await query.answer()
 
         if not not_joined_channels:
+            # (کاربر بررسی را پاس کرد)
             await query.message.delete()
-            user_doc = await get_user_async(query.from_user.id)
+            user_doc = await get_user_async(user.id)
             await context.bot.send_message(
-                chat_id=query.from_user.id,
+                chat_id=user.id,
                 text="✅ عضویت شما تایید شد. خوش آمدید!\nحالا می‌توانید از امکانات ربات استفاده کنید.",
                 reply_markup=get_main_keyboard(user_doc)
             )
         else:
+            # (کاربر بررسی را رد شد)
             await query.answer("❌ شما هنوز عضو تمام کانال‌ها/گروه‌ها نشده‌اید.", show_alert=True)
-        raise ApplicationHandlerStop
-
-    if not_joined_channels:
-        keyboard = await get_join_keyboard(context)
-        if keyboard and update.effective_message:
-            await update.effective_message.reply_text(
-                "⚪️ برای استفاده از ربات، لطفا ابتدا در تمام کانال/گروه‌های زیر عضو شوید و سپس دکمه بررسی را بزنید:",
+            # (ارسال مجدد پیام فقط با کانال‌های باقیمانده)
+            keyboard = await get_specific_join_keyboard(not_joined_channels)
+            await query.message.edit_text(
+                "⚪️ لطفا در کانال/گروه‌های *باقیمانده* زیر عضو شوید و سپس دکمه بررسی را بزنید:",
                 reply_markup=keyboard
             )
+        
+        # (پردازش این آپدیت را متوقف کن، چه موفق چه ناموفق)
         raise ApplicationHandlerStop
 
+    # --- مسدود کردن کاربر اگر عضو نباشد ---
+    if not_joined_channels:
+        # (کاربر عضو نیست و دکمه "بررسی" را نزده است)
+        keyboard = await get_specific_join_keyboard(not_joined_channels)
+        
+        # (ساخت متن پیام)
+        channels_list_text = "\n".join([f"- {ch['channel_username']}" for ch in not_joined_channels])
+        text = (
+            "⚪️ برای استفاده از ربات، لطفا ابتدا در تمام کانال/گروه‌های زیر عضو شوید و سپس دکمه «بررسی عضویت» را بزنید:\n"
+            f"{channels_list_text}"
+        )
+
+        if query:
+            # (اگر کلیک روی دکمه‌ای (غیر از بررسی) بوده، کلیک را پاسخ بده و پیام جدید بفرست)
+            await query.answer("⛔️ ابتدا باید عضو کانال‌ها شوید.", show_alert=True)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=text,
+                reply_markup=keyboard
+            )
+        elif update.effective_message:
+            # (اگر پیام متنی بوده، فقط پاسخ بده)
+            await update.effective_message.reply_text(
+                text=text,
+                reply_markup=keyboard
+            )
+        
+        # (مسدود کردن تمام هندلرهای دیگر)
+        raise ApplicationHandlerStop
+
+    # (اگر به اینجا برسد، یعنی کاربر عضو است، پس اجازه بده آپدیت ادامه یابد)
     return
 
 # =======================================================
@@ -472,11 +506,39 @@ async def admin_panel_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 به پنل ادمین خوش آمدید:", reply_markup=admin_keyboard)
     return ADMIN_MENU
 
+# (تغییر: تابع جدید برای نمایش لیست کانال‌ها جهت حذف)
+async def show_channels_for_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows an inline keyboard of channels for removal."""
+    channels = list(GLOBAL_CHANNELS.values())
+    
+    if not channels:
+        await update.message.reply_text("هیچ کانالی برای حذف کردن وجود ندارد.", reply_markup=admin_keyboard)
+        return ADMIN_MENU
+
+    keyboard = []
+    for channel in channels:
+        # (استفاده از channel_username به عنوان شناسه یکتا)
+        keyboard.append([
+            InlineKeyboardButton(
+                channel['channel_username'], 
+                callback_data=f"admin_remove_{channel['channel_username']}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("لغو", callback_data="admin_remove_cancel")])
+    
+    await update.message.reply_text(
+        "لطفا کانالی که می‌خواهید حذف شود را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    # (در استیت ادمین باقی می‌مانیم، عملیات توسط کالبک هندل می‌شود)
+    return ADMIN_MENU
+
 async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = update.message.text
     context.user_data['admin_choice'] = choice
 
-    # (تغییر: به‌روزرسانی راهنماها برای دکمه‌های جدید)
+    # (تغییر: حذف "➖ حذف کانال عضویت" از لیست راهنماها)
     prompts = {
         "💳 تنظیم شماره کارت": "لطفا شماره کارت جدید را وارد کنید:",
         "👤 تنظیم صاحب کارت": "لطفا نام صاحب حساب جدید را وارد کنید:",
@@ -485,7 +547,7 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         "🎁 تنظیم پاداش دعوت": "پاداش هر دعوت موفق به اعتبار را وارد کنید:",
         "📉 تنظیم مالیات (۰-۱۰۰)": "درصد مالیات (بین ۰ تا ۱۰۰) را وارد کنید:",
         "➕ افزودن کانال عضویت": "یوزرنیم کانال/گروه با @ (مثل @channel) یا لینک کامل (مثل https://t.me/channel) را ارسال کنید:",
-        "➖ حذف کانال عضویت": "یوزرنیم کانال/گروه با @ یا لینک کامل را برای حذف ارسال کنید:",
+        # "➖ حذف کانال عضویت" removed from here
         "🖼 تنظیم عکس شرط": "لطفا عکس مورد نظر برای شرط را ارسال کنید."
     }
 
@@ -494,8 +556,7 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(prompts[choice], reply_markup=ReplyKeyboardRemove())
         if choice == "➕ افزودن کانال عضویت":
             return AWAIT_NEW_CHANNEL
-        elif choice == "➖ حذف کانال عضویت":
-            return AWAIT_REMOVE_CHANNEL
+        # (تغییر: حذف بلوک 'elif' برای '➖ حذف کانال عضویت')
         elif choice == "🖼 تنظیم عکس شرط":
             return AWAIT_BET_PHOTO
         elif choice == "💰 تنظیم موجودی کاربر":
@@ -511,8 +572,11 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         elif choice == "👤 تنظیم صاحب کارت":
             return AWAIT_ADMIN_SET_CARD_HOLDER
         else:
-            # (این 'else' احتمالا هرگز فراخوانی نمی‌شود اما برای اطمینان)
             return AWAIT_ADMIN_REPLY
+    
+    # (تغییر: '➖ حذف کانال عضویت' اکنون به این بلوک می‌افتد)
+    elif choice == "➖ حذف کانال عضویت":
+        return await show_channels_for_removal(update, context) # (فراخوانی تابع جدید)
             
     elif choice == "مدیریت کاربر":
         await update.message.reply_text("آیدی عددی کاربر مورد نظر را وارد کنید:", reply_markup=ReplyKeyboardRemove())
@@ -828,33 +892,8 @@ async def process_new_channel(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ADMIN_MENU
 
-async def process_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply = update.message.text.strip()
-    channel_username = None
-
-    if reply.startswith('@'):
-        channel_username = reply
-    elif "t.me/" in reply:
-        try:
-            username = reply.split("t.me/")[-1].split('/')[0]
-            if not username: raise ValueError("Invalid link")
-            channel_username = f"@{username}"
-        except Exception:
-             await update.message.reply_text("❌ لینک نامعتبر است.", reply_markup=admin_keyboard)
-             return AWAIT_REMOVE_CHANNEL
-    else:
-        await update.message.reply_text("❌ ورودی نامعتبر است. لطفا یوزرنیم با @ یا لینک کامل t.me را ارسال کنید.", reply_markup=admin_keyboard)
-        return AWAIT_REMOVE_CHANNEL
-
-    # (حذف از دیکشنری حافظه)
-    if channel_username in GLOBAL_CHANNELS:
-        del GLOBAL_CHANNELS[channel_username]
-        await update.message.reply_text(f"✅ کانال {channel_username} با موفقیت حذف شد.", reply_markup=admin_keyboard)
-    else:
-        await update.message.reply_text(f"❌ کانال {channel_username} یافت نشد.", reply_markup=admin_keyboard)
-
-    context.user_data.clear()
-    return ADMIN_MENU
+# (تغییر: این تابع دیگر استفاده نمی‌شود و حذف شده است)
+# async def process_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE): ...
 
 async def process_bet_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
@@ -926,13 +965,46 @@ async def cancel_bet_job(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.warning(f"Could not edit expired bet message {message_id}: {e}")
 
+# (تغییر: تابع جدید برای مدیریت کالبک حذف کانال)
+async def handle_channel_removal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin's choice of channel to remove."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "admin_remove_cancel":
+        await query.edit_message_text("عملیات لغو شد.")
+        return
+
+    # (استخراج یوزرنیم از "admin_remove_@channelname")
+    channel_username = data.replace("admin_remove_", "")
+    
+    if channel_username in GLOBAL_CHANNELS:
+        del GLOBAL_CHANNELS[channel_username]
+        logging.info(f"Admin {query.from_user.id} removed channel {channel_username}")
+        await query.edit_message_text(f"✅ کانال {channel_username} با موفقیت حذف شد.")
+    else:
+        logging.warning(f"Admin {query.from_user.id} tried to remove non-existent channel {channel_username}")
+        await query.edit_message_text(f"❌ کانال {channel_username} یافت نشد (شاید قبلا حذف شده باشد).")
+
+
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles general callback queries."""
     query = update.callback_query
+    
+    # (تغییر: بررسی کالبک‌های حذف کانال قبل از هر چیز)
+    if query.data.startswith("admin_remove_"):
+        await handle_channel_removal_callback(update, context) # (این تابع خودش query.answer() را صدا می‌زند)
+        return
+    
+    # (تغییر: query.answer() به اینجا منتقل شد تا برای همه کالبک‌های دیگر اجرا شود)
     await query.answer()
     user_id = query.from_user.id
     data = query.data.split('_')
     action = data[0]
+
+    # (کالبک "check_join_membership" اکنون در membership_check_handler مدیریت می‌شود و به اینجا نمی‌رسد)
 
     if action == "tx":
         tx_id = int(data[2])
@@ -1394,7 +1466,7 @@ if __name__ == "__main__":
     flask_thread.start()
 
     # --- Conversation Handlers ---
-    # (تغییر: افزودن استیت‌ها و به‌روزرسانی رگکس منو)
+    # (تغییر: حذف AWAIT_REMOVE_CHANNEL از استیت‌ها)
     admin_conv_states = {
         ADMIN_MENU: [
             MessageHandler(filters.Regex("^(💳 تنظیم شماره کارت|👤 تنظیم صاحب کارت|مدیریت کاربر)$"), process_admin_choice),
@@ -1407,7 +1479,7 @@ if __name__ == "__main__":
         AWAIT_ADMIN_SET_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_card_number)],
         AWAIT_ADMIN_SET_CARD_HOLDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_card_holder)],
         AWAIT_NEW_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_new_channel)],
-        AWAIT_REMOVE_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_remove_channel)],
+        # (AWAIT_REMOVE_CHANNEL) حذف شد
         AWAIT_BET_PHOTO: [MessageHandler(filters.PHOTO, process_bet_photo)],
         AWAIT_ADMIN_SET_BALANCE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_balance_id)],
         AWAIT_ADMIN_SET_BALANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_balance)],
@@ -1471,6 +1543,7 @@ if __name__ == "__main__":
     )
 
     # --- Add handlers ---
+    # (تغییر: هندلر عضویت اجباری با اولویت -1 اضافه شد)
     application.add_handler(TypeHandler(Update, membership_check_handler), group=-1)
     application.add_error_handler(error_handler)
 
@@ -1493,6 +1566,7 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex(r'^(کسر اعتبار|کسر) \d+$') & filters.REPLY & filters.ChatType.GROUPS, deduct_balance_handler))
     application.add_handler(MessageHandler(filters.Regex(r'^موجودی 💰$') & filters.ChatType.GROUPS, group_balance_handler))
 
+    # (تغییر: هندلر کالبک عمومی برای مدیریت همه کالبک‌ها از جمله حذف کانال)
     application.add_handler(CallbackQueryHandler(callback_query_handler))
 
     logging.info("Starting Telegram Bot (Polling)...")
