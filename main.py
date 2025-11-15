@@ -73,7 +73,10 @@ BOT_EVENT_LOOP = None
  AWAIT_NEW_CHANNEL, AWAIT_REMOVE_CHANNEL, AWAIT_BET_PHOTO,
  AWAIT_ADMIN_SET_BALANCE, AWAIT_ADMIN_TAX, AWAIT_ADMIN_CREDIT_PRICE,
  AWAIT_ADMIN_REFERRAL_PRICE, AWAIT_ADMIN_SET_BALANCE_ID,
- AWAIT_MANAGE_USER_ID, AWAIT_MANAGE_USER_ROLE) = range(16)
+ AWAIT_MANAGE_USER_ID, AWAIT_MANAGE_USER_ROLE,
+ # (تغییر: افزودن استیت‌های جدید برای تنظیم کارت)
+ AWAIT_ADMIN_SET_CARD_NUMBER, AWAIT_ADMIN_SET_CARD_HOLDER
+) = range(18)
 
 
 # =======================================================
@@ -158,14 +161,16 @@ def get_main_keyboard(user_doc):
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# (تغییر: دکمه تنظیم شماره کارت به دو دکمه مجزا تقسیم شد)
 admin_keyboard = ReplyKeyboardMarkup([
     [KeyboardButton("📊 آمار کلی"), KeyboardButton("💳 تنظیم شماره کارت")],
-    [KeyboardButton("مدیریت کاربر"), KeyboardButton("💰 تنظیم موجودی کاربر")],
-    [KeyboardButton("📈 تنظیم قیمت اعتبار"), KeyboardButton("🎁 تنظیم پاداش دعوت")],
-    [KeyboardButton("📉 تنظیم مالیات (۰-۱۰۰)"), KeyboardButton("➕ افزودن کانال عضویت")],
-    [KeyboardButton("➖ حذف کانال عضویت"), KeyboardButton("👁‍🗨 لیست کانال‌های عضویت")],
-    [KeyboardButton("✅/❌ قفل عضویت اجباری"), KeyboardButton("🖼 تنظیم عکس شرط")],
-    [KeyboardButton("🗑 حذف عکس شرط"), KeyboardButton("⬅️ بازگشت به منوی اصلی")]
+    [KeyboardButton("👤 تنظیم صاحب کارت"), KeyboardButton("مدیریت کاربر")],
+    [KeyboardButton("💰 تنظیم موجودی کاربر"), KeyboardButton("📈 تنظیم قیمت اعتبار")],
+    [KeyboardButton("🎁 تنظیم پاداش دعوت"), KeyboardButton("📉 تنظیم مالیات (۰-۱۰۰)")],
+    [KeyboardButton("➕ افزودن کانال عضویت"), KeyboardButton("➖ حذف کانال عضویت")],
+    [KeyboardButton("👁‍🗨 لیست کانال‌های عضویت"), KeyboardButton("✅/❌ قفل عضویت اجbاری")],
+    [KeyboardButton("🖼 تنظیم عکس شرط"), KeyboardButton("🗑 حذف عکس شرط")],
+    [KeyboardButton("⬅️ بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
 bet_group_keyboard = ReplyKeyboardMarkup([
@@ -233,7 +238,7 @@ async def membership_check_handler(update: Update, context: ContextTypes.DEFAULT
             try:
                 await context.bot.send_message(
                     chat_id=OWNER_ID,
-                    text=f"⚠️ **خطا در بررسی عضویت اجباری** ⚠️\n\n"
+                    text=f"⚠️ **خطا در بررسی عضویت اجbاری** ⚠️\n\n"
                          f"ربات نتوانست عضویت کاربر `{user_id}` را در کانال `{channel_username}` بررسی کند.\n\n"
                          f"**دلیل احتمالی:** ربات در کانال ادمین نیست یا یوزرنیم اشتباه است.\n"
                          f"**خطای اصلی:** `{e}`",
@@ -471,8 +476,10 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     choice = update.message.text
     context.user_data['admin_choice'] = choice
 
+    # (تغییر: به‌روزرسانی راهنماها برای دکمه‌های جدید)
     prompts = {
-        "💳 تنظیم شماره کارت": "شماره کارت و نام صاحب حساب را در دو خط وارد کنید:",
+        "💳 تنظیم شماره کارت": "لطفا شماره کارت جدید را وارد کنید:",
+        "👤 تنظیم صاحب کارت": "لطفا نام صاحب حساب جدید را وارد کنید:",
         "💰 تنظیم موجودی کاربر": "ابتدا آیدی عددی کاربر را وارد کنید:",
         "📈 تنظیم قیمت اعتبار": "قیمت جدید هر اعتبار به تومان را وارد کنید:",
         "🎁 تنظیم پاداش دعوت": "پاداش هر دعوت موفق به اعتبار را وارد کنید:",
@@ -482,6 +489,7 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         "🖼 تنظیم عکس شرط": "لطفا عکس مورد نظر برای شرط را ارسال کنید."
     }
 
+    # (تغییر: به‌روزرسانی منطق برای هدایت به استیت‌های جدید)
     if choice in prompts:
         await update.message.reply_text(prompts[choice], reply_markup=ReplyKeyboardRemove())
         if choice == "➕ افزودن کانال عضویت":
@@ -498,28 +506,33 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
             return AWAIT_ADMIN_CREDIT_PRICE
         elif choice == "🎁 تنظیم پاداش دعوت":
             return AWAIT_ADMIN_REFERRAL_PRICE
+        elif choice == "💳 تنظیم شماره کارت":
+            return AWAIT_ADMIN_SET_CARD_NUMBER
+        elif choice == "👤 تنظیم صاحب کارت":
+            return AWAIT_ADMIN_SET_CARD_HOLDER
         else:
+            # (این 'else' احتمالا هرگز فراخوانی نمی‌شود اما برای اطمینان)
             return AWAIT_ADMIN_REPLY
             
     elif choice == "مدیریت کاربر":
         await update.message.reply_text("آیدی عددی کاربر مورد نظر را وارد کنید:", reply_markup=ReplyKeyboardRemove())
         return AWAIT_MANAGE_USER_ID
 
-    elif choice == "✅/❌ قفل عضویت اجباری":
+    elif choice == "✅/❌ قفل عضویت اجbاری":
         current_lock_str = await get_setting_async('forced_channel_lock')
         new_lock = not (current_lock_str == 'true')
         await set_setting_async('forced_channel_lock', 'true' if new_lock else 'false')
         status = "فعال" if new_lock else "غیرفعال"
-        await update.message.reply_text(f"✅ قفل عضویت در کانال اجباری {status} شد.")
+        await update.message.reply_text(f"✅ قفل عضویت در کانال اجbاری {status} شد.")
         return ADMIN_MENU
 
     elif choice == "👁‍🗨 لیست کانال‌های عضویت":
         channels = list(GLOBAL_CHANNELS.values())
         if not channels:
-            await update.message.reply_text("هیچ کانالی برای عضویت اجباری تنظیم نشده است.", reply_markup=admin_keyboard)
+            await update.message.reply_text("هیچ کانالی برای عضویت اجbاری تنظیم نشده است.", reply_markup=admin_keyboard)
             return ADMIN_MENU
 
-        message = "لیست کانال‌های عضویت اجباری:\n\n"
+        message = "لیست کانال‌های عضویت اجbاری:\n\n"
         for i, channel in enumerate(channels, 1):
             message += f"{i}. {channel['channel_username']} ({channel['channel_link']})\n"
 
@@ -556,12 +569,10 @@ async def process_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply = update.message.text.strip()
     
     try:
-        if last_choice == "💳 تنظیم شماره کارت":
-            parts = reply.split('\n')
-            await set_setting_async('card_number', parts[0].strip())
-            await set_setting_async('card_holder', parts[1].strip() if len(parts) > 1 else "")
-        
-        await update.message.reply_text("✅ تنظیمات با موفقیت ذخیره شد.", reply_markup=admin_keyboard)
+        # (منطق "تنظیم شماره کارت" به توابع اختصاصی منتقل شده است)
+        # (این تابع در حال حاضر توسط هیچ انتخابی استفاده نمی‌شود)
+        logging.warning(f"process_admin_reply was called unexpectedly with choice: {last_choice}")
+        await update.message.reply_text("✅ عملیات انجام شد.", reply_markup=admin_keyboard)
 
     except (ValueError, IndexError, TypeError) as e:
         logging.error(f"Admin reply error for choice '{last_choice}': {e}")
@@ -572,6 +583,42 @@ async def process_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data.pop('admin_choice', None)
     return ADMIN_MENU
+
+# (تغییر: افزودن توابع جدید برای مدیریت تنظیمات کارت)
+async def process_admin_set_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets the new card number."""
+    try:
+        card_number = update.message.text.strip()
+        if not card_number:
+            raise ValueError("شماره کارت نمی‌تواند خالی باشد")
+        
+        await set_setting_async('card_number', card_number)
+        await update.message.reply_text(f"✅ شماره کارت با موفقیت به `{card_number}` تنظیم شد.", parse_mode=ParseMode.MARKDOWN, reply_markup=admin_keyboard)
+    except ValueError as e:
+        logging.error(f"Error setting card number: {e}")
+        await update.message.reply_text(f"❌ ورودی نامعتبر است. لطفا شماره کارت را دوباره وارد کنید.\n({e})")
+        return AWAIT_ADMIN_SET_CARD_NUMBER
+    
+    context.user_data.clear()
+    return ADMIN_MENU
+
+async def process_admin_set_card_holder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets the new card holder name."""
+    try:
+        card_holder = update.message.text.strip()
+        if not card_holder:
+            raise ValueError("نام صاحب کارت نمی‌تواند خالی باشد")
+        
+        await set_setting_async('card_holder', card_holder)
+        await update.message.reply_text(f"✅ نام صاحب حساب با موفقیت به `{card_holder}` تنظیم شد.", parse_mode=ParseMode.MARKDOWN, reply_markup=admin_keyboard)
+    except ValueError as e:
+        logging.error(f"Error setting card holder: {e}")
+        await update.message.reply_text(f"❌ ورودی نامعتبر است. لطفا نام صاحب حساب را دوباره وارد کنید.\n({e})")
+        return AWAIT_ADMIN_SET_CARD_HOLDER
+    
+    context.user_data.clear()
+    return ADMIN_MENU
+
 
 # --- New Admin Conversation Handlers ---
 
@@ -765,7 +812,7 @@ async def process_new_channel(update: Update, context: ContextTypes.DEFAULT_TYPE
         chat = await context.bot.get_chat(channel_username)
         member = await chat.get_member(context.bot.id)
         if member.status not in ['administrator', 'creator']:
-             await update.message.reply_text(f"⚠️ **هشدار:** ربات در کانال {channel_username} ادمین نیست. عضویت اجباری کار نخواهد کرد مگر اینکه ربات را ادمین کنید.", parse_mode=ParseMode.MARKDOWN)
+             await update.message.reply_text(f"⚠️ **هشدار:** ربات در کانال {channel_username} ادمین نیست. عضویت اجbاری کار نخواهد کرد مگر اینکه ربات را ادمین کنید.", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await update.message.reply_text(f"⚠️ **هشدار:** ربات نتوانست کانال {channel_username} را بررسی کند. خطا: {e}\n"
                                         f"لطفا مطمئن شوید یوزرنیم/لینک صحیح است و ربات عضو کانال می‌باشد (و برای بررسی عضویت، باید ادمین هم باشد).",
@@ -1347,15 +1394,18 @@ if __name__ == "__main__":
     flask_thread.start()
 
     # --- Conversation Handlers ---
+    # (تغییر: افزودن استیت‌ها و به‌روزرسانی رگکس منو)
     admin_conv_states = {
         ADMIN_MENU: [
-            MessageHandler(filters.Regex("^(💳 تنظیم شماره کارت|مدیریت کاربر)$"), process_admin_choice),
+            MessageHandler(filters.Regex("^(💳 تنظیم شماره کارت|👤 تنظیم صاحب کارت|مدیریت کاربر)$"), process_admin_choice),
             MessageHandler(filters.Regex("^(➕ افزودن کانال عضویت|➖ حذف کانال عضویت|🖼 تنظیم عکس شرط)$"), process_admin_choice),
             MessageHandler(filters.Regex(r"^(💰 تنظیم موجودی کاربر|📈 تنظیم قیمت اعتبار|🎁 تنظیم پاداش دعوت|📉 تنظیم مالیات \(۰-۱۰۰\))$"), process_admin_choice),
-            MessageHandler(filters.Regex("^(✅/❌ قفل عضویت اجباری|👁‍🗨 لیست کانال‌های عضویت|📊 آمار کلی|🗑 حذف عکس شرط)$"), process_admin_choice),
+            MessageHandler(filters.Regex("^(✅/❌ قفل عضویت اجbاری|👁‍🗨 لیست کانال‌های عضویت|📊 آمار کلی|🗑 حذف عکس شرط)$"), process_admin_choice),
             MessageHandler(filters.Regex("^⬅️ بازگشت به منوی اصلی$"), process_admin_choice),
         ],
         AWAIT_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_reply)],
+        AWAIT_ADMIN_SET_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_card_number)],
+        AWAIT_ADMIN_SET_CARD_HOLDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_set_card_holder)],
         AWAIT_NEW_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_new_channel)],
         AWAIT_REMOVE_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_remove_channel)],
         AWAIT_BET_PHOTO: [MessageHandler(filters.PHOTO, process_bet_photo)],
