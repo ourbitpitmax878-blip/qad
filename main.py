@@ -5,6 +5,7 @@ import re
 import secrets
 import contextlib
 from threading import Thread
+import time  # اضافه شده برای تایمر ذخیره‌سازی
 from flask import Flask
 from telegram import (Update, ReplyKeyboardMarkup, KeyboardButton,
                       InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove)
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 import html
 import traceback
 import json
+import pymongo  # اضافه شده برای دیتابیس
 
 # =======================================================
 #  بخش ۱: تنظیمات اولیه و پیکربندی
@@ -27,13 +29,25 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- Environment Variables & Constants ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8235083147:AAGUWM3QPg6i7B3nw0lGbi8ERZlyI0wU4pQ")
-OWNER_ID = int(os.environ.get("OWNER_ID", 8241063918))
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8501826065:AAFNODCZ-Q0UvOgFcMNMs-mnThv2zEvQXro")
+OWNER_ID = int(os.environ.get("OWNER_ID", 7307797982))
 
 TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
 
+# --- MongoDB Connection (اتصال به دیتابیس) ---
+MONGO_URI = "mongodb+srv://amirpitmax5_db_user:q7jB6AU7n15K4pr1@cluster0.lifwlny.mongodb.net/?appName=Cluster0"
+DB_NAME = "telegram_bot_data"  # نام دیتابیس در مونگو
+
+try:
+    mongo_client = pymongo.MongoClient(MONGO_URI)
+    db = mongo_client[DB_NAME]
+    logging.info("✅ Connected to MongoDB successfully.")
+except Exception as e:
+    logging.error(f"❌ Failed to connect to MongoDB: {e}")
+    db = None
+
 # --- In-Memory Database (دیتابیس درون حافظه‌ای) ---
-# هشدار: تمام این اطلاعات با هر بار ری‌استارت ربات پاک می‌شوند.
+# این متغیرها اکنون با دیتابیس سینک می‌شوند
 GLOBAL_USERS = {}
 GLOBAL_SETTINGS = {}
 GLOBAL_TRANSACTIONS = {}
@@ -46,8 +60,57 @@ BET_ID_COUNTER = 1
 
 
 def init_memory_db():
-    """Initializes the in-memory settings with default values."""
-    logging.info("Initializing in-memory database...")
+    """
+    Initializes the in-memory settings from MongoDB if available,
+    otherwise uses defaults.
+    """
+    global TX_ID_COUNTER, BET_ID_COUNTER
+    logging.info("Initializing database (Loading from MongoDB)...")
+    
+    if db is not None:
+        # 1. بارگذاری تنظیمات
+        try:
+            for doc in db.settings.find():
+                GLOBAL_SETTINGS[doc['_id']] = doc['value']
+        except Exception as e: logging.error(f"Error loading settings: {e}")
+
+        # 2. بارگذاری کاربران
+        try:
+            for doc in db.users.find():
+                user_id = int(doc['user_id'])
+                GLOBAL_USERS[user_id] = doc
+        except Exception as e: logging.error(f"Error loading users: {e}")
+
+        # 3. بارگذاری تراکنش‌ها و تنظیم شمارنده
+        try:
+            max_tx_id = 0
+            for doc in db.transactions.find():
+                tx_id = int(doc['tx_id'])
+                GLOBAL_TRANSACTIONS[tx_id] = doc
+                if tx_id > max_tx_id:
+                    max_tx_id = tx_id
+            TX_ID_COUNTER = max_tx_id + 1
+        except Exception as e: logging.error(f"Error loading transactions: {e}")
+
+        # 4. بارگذاری شرط‌ها و تنظیم شمارنده
+        try:
+            max_bet_id = 0
+            for doc in db.bets.find():
+                bet_id = int(doc['bet_id'])
+                # تبدیل تاریخ‌ها از فرمت مونگو اگر لازم باشد (خود pymongo هندل می‌کند)
+                GLOBAL_BETS[bet_id] = doc
+                if bet_id > max_bet_id:
+                    max_bet_id = bet_id
+            BET_ID_COUNTER = max_bet_id + 1
+        except Exception as e: logging.error(f"Error loading bets: {e}")
+
+        # 5. بارگذاری کانال‌ها
+        try:
+            for doc in db.channels.find():
+                GLOBAL_CHANNELS[doc['channel_username']] = doc
+        except Exception as e: logging.error(f"Error loading channels: {e}")
+
+    # تنظیم مقادیر پیش‌فرض اگر در دیتابیس نبودند
     default_settings = {
         'credit_price': '1000',
         'initial_balance': '10',
@@ -62,13 +125,50 @@ def init_memory_db():
     for key, value in default_settings.items():
         if key not in GLOBAL_SETTINGS:
             GLOBAL_SETTINGS[key] = value
-    logging.info("Default settings loaded into memory.")
+    
+    logging.info(f"Database loaded. Users: {len(GLOBAL_USERS)}, Tx Counter: {TX_ID_COUNTER}")
+
+
+def background_db_sync():
+    """
+    این تابع در پس‌زمینه اجرا می‌شود و هر ۱۰ ثانیه
+    اطلاعات را در دیتابیس ذخیره می‌کند.
+    """
+    while True:
+        if db is None:
+            time.sleep(20)
+            continue
+        
+        try:
+            # ذخیره کاربران (از list() استفاده می‌کنیم تا اگر دیکشنری تغییر کرد ارور ندهد)
+            for user_id, data in list(GLOBAL_USERS.items()):
+                db.users.replace_one({'user_id': user_id}, data, upsert=True)
+            
+            # ذخیره تنظیمات
+            for key, value in list(GLOBAL_SETTINGS.items()):
+                db.settings.replace_one({'_id': key}, {'value': value}, upsert=True)
+            
+            # ذخیره تراکنش‌ها
+            for tx_id, data in list(GLOBAL_TRANSACTIONS.items()):
+                db.transactions.replace_one({'tx_id': tx_id}, data, upsert=True)
+            
+            # ذخیره شرط‌ها
+            for bet_id, data in list(GLOBAL_BETS.items()):
+                db.bets.replace_one({'bet_id': bet_id}, data, upsert=True)
+            
+            # ذخیره کانال‌ها
+            for ch_username, data in list(GLOBAL_CHANNELS.items()):
+                db.channels.replace_one({'channel_username': ch_username}, data, upsert=True)
+
+        except Exception as e:
+            logging.error(f"Error in DB Sync loop: {e}")
+        
+        time.sleep(10)  # هر ۱۰ ثانیه ذخیره کن
 
 # --- Global Variables & State Management ---
 BOT_EVENT_LOOP = None
 
 # --- Conversation Handler States ---
-# (تغییر: حذف AWAIT_REMOVE_CHANNEL و مرتب‌سازی مجدد)
 (ADMIN_MENU, AWAIT_ADMIN_REPLY, AWAIT_DEPOSIT_AMOUNT, AWAIT_DEPOSIT_RECEIPT,
  AWAIT_SUPPORT_MESSAGE, AWAIT_ADMIN_SUPPORT_REPLY,
  AWAIT_NEW_CHANNEL, AWAIT_BET_PHOTO,
@@ -87,10 +187,10 @@ web_app = Flask(__name__)
 @web_app.route('/')
 def health_check():
     """Health check endpoint for Render."""
-    return "Bet Bot is running.", 200
+    return "Bet Bot is running with MongoDB.", 200
 
 # =======================================================
-#  بخش ۳: توابع کمکی ربات (جایگزین دیتابیس)
+#  بخش ۳: توابع کمکی ربات
 # =======================================================
 
 async def get_setting_async(name):
@@ -98,8 +198,14 @@ async def get_setting_async(name):
     return GLOBAL_SETTINGS.get(name)
 
 async def set_setting_async(name, value):
-    """Sets a setting in the in-memory GLOBAL_SETTINGS."""
+    """Sets a setting in the in-memory GLOBAL_SETTINGS and saves to DB immediately."""
     GLOBAL_SETTINGS[name] = str(value)
+    # ذخیره فوری تنظیمات مهم در دیتابیس
+    if db:
+        try:
+            db.settings.replace_one({'_id': name}, {'value': str(value)}, upsert=True)
+        except Exception as e:
+            logging.error(f"Failed to save setting {name} to DB: {e}")
 
 async def get_user_async(user_id):
     """
@@ -133,6 +239,14 @@ async def get_user_async(user_id):
         'is_moderator': False
     }
     GLOBAL_USERS[user_id] = new_user_doc
+    
+    # ذخیره کاربر جدید در دیتابیس
+    if db:
+        try:
+            db.users.replace_one({'user_id': user_id}, new_user_doc, upsert=True)
+        except Exception as e:
+            logging.error(f"Failed to save new user {user_id} to DB: {e}")
+            
     return new_user_doc
 
 def get_user_display_name(user):
@@ -322,7 +436,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         admin_welcome_text = (
             f"👑 سلام ادمین عزیز، به پنل مدیریت خوش آمدید!\n\n"
-            f"📊 **آمار ربات (درون حافظه‌ای):**\n"
+            f"📊 **آمار ربات (سینک شده با دیتابیس):**\n"
             f"  -  👥 **تعداد کل کاربران:** {total_users:,}\n"
             f"  -  🧾 **تراکنش‌های در انتظار:** {pending_tx:,}"
         )
@@ -609,7 +723,7 @@ async def process_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         total_balance = sum(u.get('balance', 0) for u in GLOBAL_USERS.values())
 
         admin_welcome_text = (
-            f"📊 **آمار ربات (درون حافظه‌ای):**\n"
+            f"📊 **آمار ربات (سینک شده با دیتابیس):**\n"
             f"  -  👥 **تعداد کل کاربران:** {total_users:,}\n"
             f"  -  💰 **مجموع اعتبار کاربران:** {total_balance:,}\n"
             f"  -  🧾 **تراکنش‌های در انتظار:** {pending_tx:,}"
@@ -1420,8 +1534,8 @@ async def post_init(application: Application):
     global BOT_EVENT_LOOP
     BOT_EVENT_LOOP = asyncio.get_running_loop()
     
-    init_memory_db() # <--- راه‌اندازی حافظه به جای دیتابیس
-    logging.info("In-memory settings verified.")
+    init_memory_db() # <--- راه‌اندازی حافظه و لود از دیتابیس
+    logging.info("Database synchronized.")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -1464,6 +1578,11 @@ if __name__ == "__main__":
     logging.info("Starting Flask app in a background thread...")
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    
+    # --- شروع ترد ذخیره‌سازی خودکار دیتابیس ---
+    logging.info("Starting DB Sync thread...")
+    db_thread = Thread(target=background_db_sync, daemon=True)
+    db_thread.start()
 
     # --- Conversation Handlers ---
     # (تغییر: حذف AWAIT_REMOVE_CHANNEL از استیت‌ها)
