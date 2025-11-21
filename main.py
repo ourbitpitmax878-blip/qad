@@ -30,6 +30,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- Environment Variables & Constants ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8235083147:AAGUWM3QPg6i7B3nw0lGbi8ERZlyI0wU4pQ")
+
+# (تغییر: آیدی مالک به درخواست شما آپدیت شد)
 OWNER_ID = int(os.environ.get("OWNER_ID", 7307797982))
 
 TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
@@ -67,6 +69,7 @@ def init_memory_db():
     global TX_ID_COUNTER, BET_ID_COUNTER
     logging.info("Initializing database (Loading from MongoDB)...")
     
+    # (تغییر: استفاده از is not None برای جلوگیری از ارور NotImplementedError)
     if db is not None:
         # 1. بارگذاری تنظیمات
         try:
@@ -135,6 +138,7 @@ def background_db_sync():
     اطلاعات را در دیتابیس ذخیره می‌کند.
     """
     while True:
+        # (تغییر: استفاده از is None برای جلوگیری از ارور)
         if db is None:
             time.sleep(20)
             continue
@@ -201,7 +205,8 @@ async def set_setting_async(name, value):
     """Sets a setting in the in-memory GLOBAL_SETTINGS and saves to DB immediately."""
     GLOBAL_SETTINGS[name] = str(value)
     # ذخیره فوری تنظیمات مهم در دیتابیس
-    if db:
+    # (تغییر: اصلاح شرط db برای رفع ارور NotImplementedError)
+    if db is not None:
         try:
             db.settings.replace_one({'_id': name}, {'value': str(value)}, upsert=True)
         except Exception as e:
@@ -241,7 +246,8 @@ async def get_user_async(user_id):
     GLOBAL_USERS[user_id] = new_user_doc
     
     # ذخیره کاربر جدید در دیتابیس
-    if db:
+    # (تغییر: اصلاح شرط db برای رفع ارور NotImplementedError)
+    if db is not None:
         try:
             db.users.replace_one({'user_id': user_id}, new_user_doc, upsert=True)
         except Exception as e:
