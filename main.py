@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- Environment Variables & Constants ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8501826065:AAFNODCZ-Q0UvOgFcMNMs-mnThv2zEvQXro")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8235083147:AAGUWM3QPg6i7B3nw0lGbi8ERZlyI0wU4pQ")
 OWNER_ID = int(os.environ.get("OWNER_ID", 7307797982))
 
 TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
